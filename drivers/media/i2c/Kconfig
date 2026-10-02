@@ -453,6 +453,14 @@ config VIDEO_OV08X40
 	  To compile this driver as a module, choose M here: the
 	  module will be called ov08x40.
 
+config VIDEO_OV13850
+	tristate "OmniVision OV13850 sensor support"
+	depends on I2C && VIDEO_DEV
+	select V4L2_FWNODE
+	help
+	  Two-lane RAW10 OV13850 sensor with a 24 MHz external clock.
+	  Adapted from Rockchip's register programming for standard V4L2.
+
 config VIDEO_OV13858
 	tristate "OmniVision OV13858 sensor support"
 	help
