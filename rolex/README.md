@@ -2,7 +2,7 @@
 
 This fork contains the board adaptation used by Ubuntu 24.04 ARM64 and Phosh on one Redmi 4A with NT35521S EBBG display, FT5346 touch, SMB358 charger, CW2015 fuel gauge, OV13850 rear camera and OV5675 front camera. Hardware variants need separate verification.
 
-The adaptation branch is `rolex-ubuntu-v4`. Its baseline is msm89x7-mainline/linux commit `50f9719b10cef792432485b0139fbcb913316e07` (`v7.1.3-r1`). The kernel is maintained as commits on top of that upstream history. This repository contains kernel source and configuration; Ubuntu rootfs packaging, credentials, firmware dumps and binary images are kept outside it.
+The adaptation branch is `rolex`. Its baseline is msm89x7-mainline/linux commit `50f9719b10cef792432485b0139fbcb913316e07` (`v7.1.3-r1`). The kernel is maintained as commits on top of that upstream history. This repository contains kernel source and configuration; Ubuntu rootfs packaging, credentials, firmware dumps and binary images are kept outside it.
 
 ## Changes
 
@@ -17,7 +17,7 @@ The adaptation branch is `rolex-ubuntu-v4`. Its baseline is msm89x7-mainline/lin
 Use an ARM64-capable Clang/LLVM toolchain, lld, make, flex, bison, bc and dtc. The base config is copied unchanged from postmarketOS pmaports commit `721be33f67ba1a98f974760779fb1cb1b1b04661`, path `device/testing/linux-postmarketos-qcom-msm89x7/config-postmarketos-qcom-msm89x7.aarch64`.
 
 ```sh
-git clone --branch rolex-ubuntu-v4 https://github.com/Railgun-wiki/linux-msm89x7.git
+git clone --branch rolex https://github.com/Railgun-wiki/linux-msm89x7.git
 cd linux-msm89x7
 mkdir -p ../rolex-kernel-build
 export ARCH=arm64 LLVM=1 LOCALVERSION=
@@ -33,7 +33,7 @@ The board DT is `qcom/msm8917-xiaomi-rolex-ubuntu.dtb`. Merge `diagnostic.config
 
 ## Verification and limits
 
-The code in the first six adaptation commits is byte-for-byte the code used for the installed `7.1.3-rolex-ubuntu-v4` kernel. Its full kernel/modules/DTBs built successfully. Physical checks established display/backlight, touch and printed keys, actual Freedreno draws, Wi-Fi, Qualcomm modem discovery, and camera test-pattern/RAW capture. Configuration includes TPROXY modules and removable-card filesystems.
+The code in the first six adaptation commits is byte-for-byte the code used for the installed `7.1.3-rolex` kernel. Its full kernel/modules/DTBs built successfully. Physical checks established display/backlight, touch and printed keys, actual Freedreno draws, Wi-Fi, Qualcomm modem discovery, and camera test-pattern/RAW capture. Configuration includes TPROXY modules and removable-card filesystems.
 
 This does not establish complete phone functionality. Charger diagnostics do not implement battery temperature protection or active charging control. Camera autofocus, OTP calibration, auto exposure/white balance and desktop JPEG capture are unfinished. Actual SIM calls/SMS/mobile data/VoLTE, physical microSD operations and TPROXY traffic remain unverified. Audio checks did not establish all acoustic paths. Known platform warnings and the GPIO workaround remain unresolved. No experimental GPU clock divider change is included.
 
