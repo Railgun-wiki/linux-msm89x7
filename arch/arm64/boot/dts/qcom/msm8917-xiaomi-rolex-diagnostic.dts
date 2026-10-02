@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* Diagnostic configuration for S88503AB1 / NT35521S EBBG / FT5346. */
+#include "msm8917-xiaomi-rolex.dts"
+
+/ {
+	model = "Xiaomi Redmi 4A FT5346 (diagnostic)";
+
+	battery: battery {
+		compatible = "simple-battery";
+		charge-full-design-microamp-hours = <3000000>;
+	};
+};
+
+&edt_ft5306 {
+	status = "okay";
+};
+
+&goodix_gt911 {
+	status = "disabled";
+};
+
+&blsp2_i2c1 {
+	status = "okay";
+
+	charger: charger@57 {
+		compatible = "summit,smb358";
+		reg = <0x57>;
+		monitored-battery = <&battery>;
+		summit,enable-usb-charging;
+		summit,preserve-boot-config;
+	};
+
+	fuel-gauge@62 {
+		compatible = "cellwise,cw2015";
+		reg = <0x62>;
+		monitored-battery = <&battery>;
+		power-supplies = <&charger>;
+		cellwise,monitor-interval-ms = <5000>;
+		cellwise,preserve-boot-config;
+	};
+};
+
+&usb {
+	dr_mode = "peripheral";
+};
+
+/* No remote processors or Android storage are needed for the first test. */
+&modem {
+	status = "disabled";
+};
+
+&adsp {
+	status = "disabled";
+};
+
+&wcnss {
+	status = "disabled";
+};
+
+&sound {
+	status = "disabled";
+};
+
+&camss {
+	status = "disabled";
+};
+
+&cci {
+	status = "disabled";
+};
+
+/* GPIO 0 faults during registration on the installed MIUI 10 firmware.
+ * Keep the unused BLSP SPI1 group out of GPIO discovery during diagnosis.
+ * This does not establish that all four pins are firmware-protected.
+ */
+&tlmm {
+	gpio-reserved-ranges = <0 4>;
+};
