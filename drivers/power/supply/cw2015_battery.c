@@ -66,6 +66,7 @@ struct cw_battery {
 
 	bool charger_attached;
 	bool battery_changed;
+	bool preserve_boot_config;
 
 	int soc;
 	int voltage_mv;
@@ -159,6 +160,24 @@ static int cw_init(struct cw_battery *cw_bat)
 	int ret;
 	unsigned int reg_val = CW2015_MODE_SLEEP;
 
+	if (cw_bat->preserve_boot_config) {
+		ret = regmap_read(cw_bat->regmap, CW2015_REG_MODE, &reg_val);
+		if (ret)
+			return ret;
+		if ((reg_val & CW2015_MODE_SLEEP_MASK) == CW2015_MODE_SLEEP)
+			return dev_err_probe(cw_bat->dev, -EBUSY,
+					     "Diagnostic mode: gauge is asleep\n");
+		ret = regmap_read(cw_bat->regmap, CW2015_REG_CONFIG, &reg_val);
+		if (ret)
+			return ret;
+		if (!(reg_val & CW2015_CONFIG_UPDATE_FLG))
+			return dev_err_probe(cw_bat->dev, -ENODATA,
+					     "Diagnostic mode: no initialized battery profile\n");
+		dev_info(cw_bat->dev,
+			 "Diagnostic mode: preserving battery profile and configuration\n");
+		return 0;
+	}
+
 	if ((reg_val & CW2015_MODE_SLEEP_MASK) == CW2015_MODE_SLEEP) {
 		reg_val = CW2015_MODE_NORMAL;
 		ret = regmap_write(cw_bat->regmap, CW2015_REG_MODE, reg_val);
@@ -228,6 +247,9 @@ static int cw_power_on_reset(struct cw_battery *cw_bat)
 	int ret;
 	unsigned char reset_val;
 
+	if (cw_bat->preserve_boot_config)
+		return -EOPNOTSUPP;
+
 	reset_val = CW2015_MODE_SLEEP;
 	ret = regmap_write(cw_bat->regmap, CW2015_REG_MODE, reset_val);
 	if (ret)
@@ -265,7 +287,8 @@ static int cw_get_soc(struct cw_battery *cw_bat)
 
 		dev_err(cw_bat->dev, "Invalid SoC %d%%\n", soc);
 		cw_bat->read_errors++;
-		if (cw_bat->read_errors > max_error_cycles) {
+		if (cw_bat->read_errors > max_error_cycles &&
+		    !cw_bat->preserve_boot_config) {
 			dev_warn(cw_bat->dev,
 				 "Too many invalid SoC reports, resetting gauge\n");
 			cw_power_on_reset(cw_bat);
@@ -276,7 +299,8 @@ static int cw_get_soc(struct cw_battery *cw_bat)
 	cw_bat->read_errors = 0;
 
 	/* Reset gauge if stuck while charging */
-	if (cw_bat->status == POWER_SUPPLY_STATUS_CHARGING && soc == cw_bat->soc) {
+	if (!cw_bat->preserve_boot_config &&
+	    cw_bat->status == POWER_SUPPLY_STATUS_CHARGING && soc == cw_bat->soc) {
 		int max_stuck_cycles =
 			CW2015_BAT_CHARGING_STUCK_MS / cw_bat->poll_interval_ms;
 
@@ -389,8 +413,18 @@ static void cw_update_voltage(struct cw_battery *cw_bat)
 static void cw_update_status(struct cw_battery *cw_bat)
 {
 	int status = POWER_SUPPLY_STATUS_DISCHARGING;
+	union power_supply_propval val;
+	int ret;
 
-	if (cw_bat->charger_attached) {
+	if (cw_bat->preserve_boot_config) {
+		/* VBUS presence alone does not prove that charging is active. */
+		ret = power_supply_get_property_from_supplier(cw_bat->rk_bat,
+							      POWER_SUPPLY_PROP_STATUS, &val);
+		if (ret)
+			status = POWER_SUPPLY_STATUS_UNKNOWN;
+		else
+			status = val.intval;
+	} else if (cw_bat->charger_attached) {
 		if (cw_bat->soc >= 100)
 			status = POWER_SUPPLY_STATUS_FULL;
 		else
@@ -562,6 +596,13 @@ static int cw2015_parse_properties(struct cw_battery *cw_bat)
 	int length;
 	int ret;
 
+	cw_bat->preserve_boot_config =
+		device_property_read_bool(dev, "cellwise,preserve-boot-config");
+	if (cw_bat->preserve_boot_config &&
+	    device_property_present(dev, "cellwise,battery-profile"))
+		return dev_err_probe(dev, -EINVAL,
+				     "Diagnostic mode does not accept a battery profile\n");
+
 	length = device_property_count_u8(dev, "cellwise,battery-profile");
 	if (length < 0) {
 		dev_warn(cw_bat->dev,
@@ -636,11 +677,26 @@ static const struct regmap_config cw2015_regmap_config = {
 	.max_register = CW2015_REG_BATINFO + CW2015_SIZE_BATINFO - 1,
 };
 
+static bool cw2015_diagnostic_writeable_reg(struct device *dev, unsigned int reg)
+{
+	return false;
+}
+
+static const struct regmap_config cw2015_diagnostic_regmap_config = {
+	.reg_bits = 8,
+	.val_bits = 8,
+	.rd_table = &regmap_rd_table,
+	.volatile_table = &regmap_vol_table,
+	.writeable_reg = cw2015_diagnostic_writeable_reg,
+	.max_register = CW2015_REG_BATINFO + CW2015_SIZE_BATINFO - 1,
+};
+
 static int cw_bat_probe(struct i2c_client *client)
 {
 	int ret;
 	struct cw_battery *cw_bat;
 	struct power_supply_config psy_cfg = { 0 };
+	const struct regmap_config *regmap_config = &cw2015_regmap_config;
 
 	cw_bat = devm_kzalloc(&client->dev, sizeof(*cw_bat), GFP_KERNEL);
 	if (!cw_bat)
@@ -656,7 +712,9 @@ static int cw_bat_probe(struct i2c_client *client)
 		return ret;
 	}
 
-	cw_bat->regmap = devm_regmap_init_i2c(client, &cw2015_regmap_config);
+	if (cw_bat->preserve_boot_config)
+		regmap_config = &cw2015_diagnostic_regmap_config;
+	cw_bat->regmap = devm_regmap_init_i2c(client, regmap_config);
 	if (IS_ERR(cw_bat->regmap)) {
 		dev_err(cw_bat->dev, "Failed to allocate regmap: %ld\n",
 			PTR_ERR(cw_bat->regmap));

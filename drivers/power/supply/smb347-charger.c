@@ -144,6 +144,7 @@
  * @usb_online: is USB input connected
  * @irq_unsupported: is interrupt unsupported by SMB hardware
  * @usb_vbus_enabled: is USB VBUS powered by SMB charger
+ * @preserve_boot_config: expose status without modifying charger registers
  * @max_charge_current: maximum current (in uA) the battery can be charged
  * @max_charge_voltage: maximum voltage (in uV) the battery can be charged
  * @pre_charge_current: current (in uA) to use in pre-charging phase
@@ -204,6 +205,7 @@ struct smb347_charger {
 	bool			usb_online;
 	bool			irq_unsupported;
 	bool			usb_vbus_enabled;
+	bool			preserve_boot_config;
 
 	unsigned int		max_charge_current;
 	unsigned int		max_charge_voltage;
@@ -1028,6 +1030,23 @@ static int get_const_charge_voltage(struct smb347_charger *smb)
 	if (!smb347_is_ps_online(smb))
 		return -ENODATA;
 
+	/* SMB358 has a special 4.35 V code. Read the retained configuration
+	 * during diagnosis rather than interpreting SMB347 status fields.
+	 */
+	if (smb->preserve_boot_config && smb->id == SMB358) {
+		ret = regmap_read(smb->regmap, CFG_FLOAT_VOLTAGE, &v);
+		if (ret < 0)
+			return ret;
+		v &= CFG_FLOAT_VOLTAGE_FLOAT_MASK;
+		if (v > 0x33)
+			return -ENODATA;
+		if (v == 0x2b)
+			return 4350000;
+		if (v > 0x2b)
+			v--;
+		return 3500000 + v * 20000;
+	}
+
 	ret = regmap_read(smb->regmap, STAT_A, &v);
 	if (ret < 0)
 		return ret;
@@ -1098,6 +1117,13 @@ static int smb347_get_property_locked(struct power_supply *psy,
 {
 	struct smb347_charger *smb = power_supply_get_drvdata(psy);
 	int ret;
+
+	/* Diagnostic mode polls status without changing IRQ configuration. */
+	if (smb->preserve_boot_config) {
+		ret = smb347_update_ps_status(smb);
+		if (ret < 0)
+			return ret;
+	}
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_STATUS:
@@ -1491,6 +1517,20 @@ static const struct regmap_config smb347_regmap = {
 	.cache_type	= REGCACHE_MAPLE,
 };
 
+static bool smb347_diagnostic_writeable_reg(struct device *dev, unsigned int reg)
+{
+	return false;
+}
+
+static const struct regmap_config smb347_diagnostic_regmap = {
+	.reg_bits	= 8,
+	.val_bits	= 8,
+	.max_register	= SMB347_MAX_REGISTER,
+	.volatile_reg	= smb347_volatile_reg,
+	.readable_reg	= smb347_readable_reg,
+	.writeable_reg	= smb347_diagnostic_writeable_reg,
+};
+
 static const struct regulator_ops smb347_usb_vbus_regulator_ops = {
 	.is_enabled	= regulator_is_enabled_regmap,
 	.enable		= smb347_usb_vbus_regulator_enable,
@@ -1534,6 +1574,7 @@ static int smb347_probe(struct i2c_client *client)
 	struct power_supply_config mains_usb_cfg = {};
 	struct regulator_config usb_rdev_cfg = {};
 	struct device *dev = &client->dev;
+	const struct regmap_config *regmap_config = &smb347_regmap;
 	struct smb347_charger *smb;
 	int ret;
 
@@ -1543,12 +1584,19 @@ static int smb347_probe(struct i2c_client *client)
 	smb->dev = &client->dev;
 	smb->id = id->driver_data;
 	i2c_set_clientdata(client, smb);
+	smb->preserve_boot_config =
+		device_property_read_bool(dev, "summit,preserve-boot-config");
+	if (smb->preserve_boot_config) {
+		/* Enforce read-only access, including any future driver paths. */
+		regmap_config = &smb347_diagnostic_regmap;
+		smb->irq_unsupported = true;
+	}
 
 	smb347_dt_parse_dev_info(smb);
 	if (!smb->use_mains && !smb->use_usb)
 		return -EINVAL;
 
-	smb->regmap = devm_regmap_init_i2c(client, &smb347_regmap);
+	smb->regmap = devm_regmap_init_i2c(client, regmap_config);
 	if (IS_ERR(smb->regmap))
 		return PTR_ERR(smb->regmap);
 
@@ -1571,6 +1619,14 @@ static int smb347_probe(struct i2c_client *client)
 	ret = smb347_get_battery_info(smb);
 	if (ret)
 		return ret;
+
+	if (smb->preserve_boot_config) {
+		ret = smb347_update_ps_status(smb);
+		if (ret < 0)
+			return ret;
+		dev_info(dev, "Diagnostic mode: preserving charger configuration\n");
+		return 0;
+	}
 
 	ret = smb347_hw_init(smb);
 	if (ret < 0)
@@ -1598,6 +1654,9 @@ static int smb347_probe(struct i2c_client *client)
 static void smb347_remove(struct i2c_client *client)
 {
 	struct smb347_charger *smb = i2c_get_clientdata(client);
+
+	if (smb->preserve_boot_config)
+		return;
 
 	smb347_usb_vbus_regulator_disable(smb->usb_rdev);
 	smb347_irq_disable(smb);
