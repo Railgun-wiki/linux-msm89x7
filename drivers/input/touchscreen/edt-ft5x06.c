@@ -21,6 +21,7 @@
 #include <linux/interrupt.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
+#include <linux/input/touch-overlay.h>
 #include <linux/input/touchscreen.h>
 #include <linux/irq.h>
 #include <linux/kernel.h>
@@ -109,6 +110,7 @@ struct edt_ft5x06_ts_data {
 	struct i2c_client *client;
 	struct input_dev *input;
 	struct touchscreen_properties prop;
+	struct list_head touch_overlay_list;
 	u16 num_x;
 	u16 num_y;
 	struct regulator *vcc;
@@ -332,6 +334,31 @@ static irqreturn_t edt_ft5x06_ts_isr(int irq, void *dev_id)
 
 		id = (buf[2] >> 4) & 0x0f;
 
+		if (id >= tsdata->max_support_points)
+			continue;
+
+		if (type == TOUCH_EVENT_UP &&
+		    !list_empty(&tsdata->touch_overlay_list)) {
+			struct input_mt_pos pos = { .x = -1, .y = -1 };
+
+			/* UP must release the key before report_slot_state marks this
+			 * slot used; otherwise sync_frame would keep the key held. */
+			touch_overlay_process_contact(&tsdata->touch_overlay_list,
+						      tsdata->input, &pos, id);
+		} else if (type != TOUCH_EVENT_UP) {
+			struct input_mt_pos pos = { .x = x, .y = y };
+
+			if (touch_overlay_process_contact(&tsdata->touch_overlay_list,
+						  tsdata->input, &pos, id)) {
+				input_mt_slot(tsdata->input, id);
+				input_mt_report_slot_state(tsdata->input,
+							   MT_TOOL_FINGER, false);
+				continue;
+			}
+			x = pos.x;
+			y = pos.y;
+		}
+
 		input_mt_slot(tsdata->input, id);
 		if (input_mt_report_slot_state(tsdata->input, MT_TOOL_FINGER,
 					       type != TOUCH_EVENT_UP))
@@ -339,7 +366,12 @@ static irqreturn_t edt_ft5x06_ts_isr(int irq, void *dev_id)
 					       x, y, true);
 	}
 
-	input_mt_report_pointer_emulation(tsdata->input, true);
+	if (!list_empty(&tsdata->touch_overlay_list)) {
+		touch_overlay_sync_frame(&tsdata->touch_overlay_list, tsdata->input);
+		input_mt_sync_frame(tsdata->input);
+	} else {
+		input_mt_report_pointer_emulation(tsdata->input, true);
+	}
 	input_sync(tsdata->input);
 
 out:
@@ -1298,9 +1330,15 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client)
 			     0, tsdata->num_y * 64 - 1, 0, 0);
 
 	touchscreen_parse_properties(input, true, &tsdata->prop);
+	INIT_LIST_HEAD(&tsdata->touch_overlay_list);
+	error = touch_overlay_map(&tsdata->touch_overlay_list, input);
+	if (error)
+		return error;
 
 	error = input_mt_init_slots(input, tsdata->max_support_points,
-				    INPUT_MT_DIRECT);
+				    INPUT_MT_DIRECT |
+				    (list_empty(&tsdata->touch_overlay_list) ? 0 :
+				     INPUT_MT_DROP_UNUSED));
 	if (error) {
 		dev_err(&client->dev, "Unable to init MT slots.\n");
 		return error;
@@ -1347,6 +1385,20 @@ static int edt_ft5x06_ts_suspend(struct device *dev)
 	struct edt_ft5x06_ts_data *tsdata = i2c_get_clientdata(client);
 	struct gpio_desc *reset_gpio = tsdata->reset_gpio;
 	int ret;
+
+	if (!list_empty(&tsdata->touch_overlay_list)) {
+		int slot;
+
+		disable_irq(tsdata->client->irq);
+		touch_overlay_sync_frame(&tsdata->touch_overlay_list, tsdata->input);
+		for (slot = 0; slot < tsdata->max_support_points; slot++) {
+			input_mt_slot(tsdata->input, slot);
+			input_mt_report_slot_state(tsdata->input, MT_TOOL_FINGER, false);
+		}
+		input_mt_sync_frame(tsdata->input);
+		input_sync(tsdata->input);
+		enable_irq(tsdata->client->irq);
+	}
 
 	if (device_may_wakeup(dev))
 		return 0;
