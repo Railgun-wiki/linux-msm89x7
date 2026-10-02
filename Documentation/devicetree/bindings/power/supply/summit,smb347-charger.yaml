@@ -25,6 +25,14 @@ properties:
 
   monitored-battery: true
 
+  summit,preserve-boot-config:
+    type: boolean
+    description: |
+      Diagnostic mode. Expose polled power supply status while rejecting
+      register writes. Do not initialize charging, interrupts or the OTG
+      regulator. Existing charger configuration is retained. This mode
+      does not provide battery temperature protection or charging control.
+
   summit,enable-usb-charging:
     type: boolean
     description: Enable charging through USB.

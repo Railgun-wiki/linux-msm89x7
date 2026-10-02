@@ -45,6 +45,13 @@ properties:
 
   monitored-battery: true
 
+  cellwise,preserve-boot-config:
+    type: boolean
+    description: |
+      Diagnostic mode. Only read an already awake gauge, without changing
+      its battery profile, alert configuration or mode. Automatic gauge
+      resets are disabled. A battery-profile must not be specified.
+
 required:
   - compatible
   - reg
