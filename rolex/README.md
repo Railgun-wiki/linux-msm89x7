@@ -17,15 +17,17 @@ The adaptation branch is `rolex-ubuntu-v4`. Its baseline is msm89x7-mainline/lin
 Use an ARM64-capable Clang/LLVM toolchain, lld, make, flex, bison, bc and dtc. The base config is copied unchanged from postmarketOS pmaports commit `721be33f67ba1a98f974760779fb1cb1b1b04661`, path `device/testing/linux-postmarketos-qcom-msm89x7/config-postmarketos-qcom-msm89x7.aarch64`.
 
 ```sh
-git clone --branch rolex-ubuntu-v4 https://github.com/Railgun-wiki/linux-redmi4a.git
-cd linux-redmi4a
+git clone --branch rolex-ubuntu-v4 https://github.com/Railgun-wiki/linux-msm89x7.git
+cd linux-msm89x7
 mkdir -p ../rolex-kernel-build
-export ARCH=arm64 LLVM=1 LOCALVERSION=-v4
+export ARCH=arm64 LLVM=1 LOCALVERSION=
 scripts/kconfig/merge_config.sh -m -O ../rolex-kernel-build \
   rolex/config/pmaports-aarch64.config rolex/config/ubuntu.config
 make O="$PWD/../rolex-kernel-build" olddefconfig
 make O="$PWD/../rolex-kernel-build" -j4 Image.gz modules dtbs
 ```
+
+The generic package/repository name is `linux-msm89x7`; this config produces kernel release `7.1.3-msm89x7`. Device selection remains in the DTB. Existing installed kernels keep their original release until a new build is explicitly installed.
 
 The board DT is `qcom/msm8917-xiaomi-rolex-ubuntu.dtb`. Merge `diagnostic.config` instead for the bounded RAM diagnostic environment. Boot packaging and the board-specific lk2nd touch selection are separate local userspace/boot tooling; plain `Image.gz` is not a complete phone boot image.
 
